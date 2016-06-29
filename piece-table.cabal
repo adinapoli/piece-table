@@ -1,0 +1,70 @@
+-- This file has been generated from package.yaml by hpack version 0.13.0.
+--
+-- see: https://github.com/sol/hpack
+
+name:           piece-table
+version:        0.0.0
+synopsis:       A new Haskeleton package.
+description:    piece-table is a new Haskeleton package.
+category:       Other
+homepage:       https://github.com/githubuser/piece-table#readme
+bug-reports:    https://github.com/githubuser/piece-table/issues
+maintainer:     Author name here
+license:        MIT
+build-type:     Simple
+cabal-version:  >= 1.10
+
+extra-source-files:
+    CHANGELOG.md
+    LICENSE.md
+    package.yaml
+    README.md
+
+source-repository head
+  type: git
+  location: https://github.com/githubuser/piece-table
+
+library
+  hs-source-dirs:
+      src
+  ghc-options: -Wall
+  build-depends: base
+               , containers
+  exposed-modules:
+      Data.Text.PieceTable
+  default-language: Haskell2010
+
+executable piece-table
+  main-is: Main.hs
+  hs-source-dirs:
+      executable
+  ghc-options: -Wall -rtsopts -threaded -with-rtsopts=-N
+  build-depends:
+      base
+    , piece-table
+  default-language: Haskell2010
+
+test-suite piece-table-test-suite
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs:
+      test-suite
+  ghc-options: -Wall -rtsopts -threaded -with-rtsopts=-N
+  build-depends:
+      base
+    , piece-table
+    , tasty
+    , tasty-hspec
+  default-language: Haskell2010
+
+benchmark piece-table-benchmarks
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs:
+      benchmark
+  ghc-options: -Wall -rtsopts -threaded -with-rtsopts=-N
+  build-depends:
+      base
+    , piece-table
+    , criterion
+  default-language: Haskell2010
