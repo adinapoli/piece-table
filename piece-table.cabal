@@ -30,6 +30,7 @@ library
   ghc-options: -Wall
   build-depends: base
                , containers
+               , text
   exposed-modules:
       Data.Text.PieceTable
   default-language: Haskell2010
