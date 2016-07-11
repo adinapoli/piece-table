@@ -1,3 +1,6 @@
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE BangPatterns #-}
+
 {-- | Implementation of the `PieceTable` data structure
 following as closely as possible this paper:
 
@@ -18,7 +21,9 @@ module Data.Text.PieceTable where
 
 --------------------------------------------------------------------------------
 import qualified Data.Text as T
+import qualified Data.List as List
 import qualified Data.Text.IO as T
+import           Data.Monoid
 
 --------------------------------------------------------------------------------
 data FileType = Original
@@ -45,11 +50,35 @@ data PieceTable = PieceTable {
   }
 
 --------------------------------------------------------------------------------
+-- | Renders the **entire** `PieceTable` to a `Text`. Extremely useful for
+-- debugging and testing, but unsafe in the sense it will load the entire content
+-- into memory.
+unsafeRender :: PieceTable -> T.Text
+unsafeRender PieceTable{..} = case table of
+  []  -> T.empty
+  lst -> List.foldl' mapPiece T.empty lst
+  where
+    mapPiece :: T.Text -> Piece -> T.Text
+    mapPiece !acc Piece{..} =
+      let render = T.take length . T.drop start
+      in case fileType of
+        Original -> acc <> render fileBuffer
+        Buffer   -> acc <> render addBuffer
+
+--------------------------------------------------------------------------------
 new :: FilePath -> IO PieceTable
 new fp = do
   c <- T.readFile fp
-  return $ PieceTable {
+  return $ new' c
+
+--------------------------------------------------------------------------------
+new' :: T.Text -> PieceTable
+new' c = PieceTable {
     table = [Piece Original 0 (T.length c)]
     , fileBuffer = c
     , addBuffer  = T.empty
     }
+
+--------------------------------------------------------------------------------
+newFromText :: T.Text -> PieceTable
+newFromText = new'
