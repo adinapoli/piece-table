@@ -17,7 +17,15 @@ Not worrying about that now.
 
 -}
 
-module Data.Text.PieceTable where
+module Data.Text.PieceTable (
+    FileType(..)
+  , Piece
+  , PieceTable
+  , new
+  , newFromText
+  -- * Unsafe functions
+  , unsafeRender
+  ) where
 
 --------------------------------------------------------------------------------
 import qualified Data.Text as T

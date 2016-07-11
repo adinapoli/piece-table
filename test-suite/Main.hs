@@ -1,10 +1,10 @@
--- Tasty makes it easy to test your code. It is a test framework that can
--- combine many different types of tests into one suite. See its website for
--- help: <http://documentup.com/feuerbach/tasty>.
+{-# LANGUAGE OverloadedStrings #-}
+
+module Main where
+
+import           Data.Text.PieceTable
 import qualified Test.Tasty
--- Hspec is one of the providers for Tasty. It provides a nice syntax for
--- writing tests. Its website has more info: <https://hspec.github.io>.
-import Test.Tasty.Hspec
+import           Test.Tasty.Hspec
 
 main :: IO ()
 main = do
@@ -13,5 +13,5 @@ main = do
 
 spec :: Spec
 spec = parallel $ do
-    it "is trivially true" $ do
-        True `shouldBe` True
+    it "unsafeRender of an unsplitted text works" $ do
+        unsafeRender (newFromText "hello with spaces") == "hello with spaces"
