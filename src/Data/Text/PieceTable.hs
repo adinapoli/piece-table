@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE BangPatterns #-}
 
 {-- | Implementation of the `PieceTable` data structure
@@ -33,6 +34,8 @@ module Data.Text.PieceTable (
   , deleteSequence
   , sequenceAt
   , replace
+  -- * Destroy a piece table.
+  , destroy
   -- * Unsafe functions
   , unsafeRender
   ) where
@@ -40,8 +43,17 @@ module Data.Text.PieceTable (
 --------------------------------------------------------------------------------
 import qualified Data.Text as T
 import qualified Data.List as List
+import qualified Data.Text.Encoding as TE
+import qualified Data.ByteString as B
 import qualified Data.Text.IO as T
+import qualified System.IO.MMap as MMap
+import           System.IO.Unsafe
+import           Control.Concurrent (myThreadId)
+import           System.Directory
+import           System.IO (openTempFile, hClose, hSetBuffering, BufferMode(..))
 import           Data.Monoid
+import           Foreign.Ptr
+import           Foreign.C.Types
 
 --------------------------------------------------------------------------------
 data FileType = Original
@@ -56,15 +68,15 @@ data Piece = Piece {
     -- ^ Which buffer the `Piece` refers to.
   , start  :: !Position
     -- ^ On offset into that buffer.
-  , length :: !Int
+  , len :: !Int
     -- ^ The length of the piece.
   }
 
 --------------------------------------------------------------------------------
 data PieceTable = PieceTable {
     table :: [Piece]
-  , fileBuffer :: T.Text
-  , addBuffer  :: T.Text
+  , fileBuffer :: FileBuffer CChar
+  , addBuffer  :: B.ByteString
   }
 
 --------------------------------------------------------------------------------
@@ -74,14 +86,15 @@ data PieceTable = PieceTable {
 unsafeRender :: PieceTable -> T.Text
 unsafeRender PieceTable{..} = case table of
   []  -> T.empty
-  lst -> List.foldl' mapPiece T.empty lst
+  lst -> TE.decodeUtf8 $ List.foldl' mapPiece mempty lst
   where
-    mapPiece :: T.Text -> Piece -> T.Text
+    mapPiece :: B.ByteString -> Piece -> B.ByteString
     mapPiece !acc Piece{..} =
-      let render = T.take length . T.drop start
+      let FileBuffer{..}  = fileBuffer
+          startPtr = plusPtr fp_ptr (fp_offset + start)
       in case fileType of
-        Original -> acc <> render fileBuffer
-        Buffer   -> acc <> render addBuffer
+        Original -> acc <> unsafePerformIO (B.packCStringLen (fp_ptr, fp_size - 1))
+        Buffer   -> acc <> B.take len (B.drop start addBuffer)
 
 {- | We want to support the API as described in the paper:
 
@@ -93,30 +106,48 @@ typedef Item unsigned char;
 type Position = Int
 type Item = Char
 
+
+--------------------------------------------------------------------------------
+data FileBuffer a = FileBuffer {
+    fb_path :: FilePath
+  , fp_ptr  :: Ptr a
+  , fp_rawSize :: !Int
+  , fp_offset  :: !Int
+  , fp_size    :: !Int
+  }
+
 --------------------------------------------------------------------------------
 new :: FilePath -> IO PieceTable
 new fp = do
-  c <- T.readFile fp
-  return $ new' c
-
---------------------------------------------------------------------------------
-new' :: T.Text -> PieceTable
-new' c = PieceTable {
-    table = [Piece Original 0 (T.length c)]
-    , fileBuffer = c
-    , addBuffer  = T.empty
+  (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly Nothing
+  return $! PieceTable {
+    table = [Piece Original 0 size]
+    , fileBuffer = FileBuffer fp fbPtr rawSize offset size
+    , addBuffer  = mempty
     }
 
 --------------------------------------------------------------------------------
-newFromText :: T.Text -> PieceTable
-newFromText = new'
+newFromText :: T.Text -> IO PieceTable
+newFromText txt = do
+  tmpDir    <- getTemporaryDirectory
+  tid       <- show <$> myThreadId
+  (fp, hdl) <- openTempFile tmpDir (tid <> ".bin")
+  hSetBuffering hdl NoBuffering
+  _ <- T.hPutStr hdl txt
+  hClose hdl `seq` return ()
+  (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly Nothing
+  return $! PieceTable {
+    table = [Piece Original 0 (T.length txt)]
+    , fileBuffer = FileBuffer fp fbPtr rawSize offset size
+    , addBuffer  = mempty
+    }
 
 --------------------------------------------------------------------------------
 empty :: PieceTable
 empty = PieceTable {
     table = mempty
-    , fileBuffer = T.empty
-    , addBuffer  = T.empty
+    , fileBuffer = FileBuffer mempty nullPtr 0 0 0
+    , addBuffer  = mempty
     }
 
 --------------------------------------------------------------------------------
@@ -148,6 +179,12 @@ itemAt _ _ = Nothing
 --------------------------------------------------------------------------------
 sequenceAt :: Position -> PieceTable -> T.Text
 sequenceAt _ _ = T.empty
+
+--------------------------------------------------------------------------------
+-- | "Destroys" a `PieceTable`, by unloading the underlying content from memory.
+-- Any other operation on the `PieceTable` will yield undefined behaviour.
+destroy :: PieceTable -> IO ()
+destroy PieceTable {fileBuffer} = MMap.munmapFilePtr (fp_ptr fileBuffer) (fp_rawSize fileBuffer)
 
 --------------------------------------------------------------------------------
 replace :: Position

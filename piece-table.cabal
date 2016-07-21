@@ -13,6 +13,7 @@ maintainer:     Author name here
 license:        MIT
 build-type:     Simple
 cabal-version:  >= 1.10
+data-files: test-resources/hello.txt
 
 extra-source-files:
     CHANGELOG.md
@@ -30,16 +31,20 @@ library
   ghc-options: -Wall
   build-depends: base
                , containers
+               , mmap
+               , directory
                , text
+               , bytestring
   exposed-modules:
-      Data.Text.PieceTable
+                  Data.Text.PieceTable
+                  Paths_piece_table
   default-language: Haskell2010
 
 executable piece-table
   main-is: Main.hs
   hs-source-dirs:
       executable
-  ghc-options: -Wall -rtsopts -threaded -with-rtsopts=-N
+  ghc-options: -Wall -Werror -rtsopts -threaded -with-rtsopts=-N
   build-depends:
       base
     , piece-table
