@@ -93,7 +93,7 @@ unsafeRender PieceTable{..} = case table of
       let FileBuffer{..}  = fileBuffer
           startPtr = plusPtr fp_ptr (fp_offset + start)
       in case fileType of
-        Original -> acc <> unsafePerformIO (B.packCStringLen (fp_ptr, fp_size - 1))
+        Original -> acc <> unsafePerformIO (B.packCStringLen (fp_ptr, fp_size))
         Buffer   -> acc <> B.take len (B.drop start addBuffer)
 
 {- | We want to support the API as described in the paper:

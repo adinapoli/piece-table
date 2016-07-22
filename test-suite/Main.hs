@@ -17,7 +17,7 @@ spec = parallel $ do
     it "new (from disk) works" $ do
       h <- getDataFileName "test-resources/hello.txt"
       t <- new h
-      unsafeRender t `shouldBe` "hello with spaces"
+      unsafeRender t `shouldBe` "hello with spaces\n"
     it "unsafeRender of an unsplitted text works" $ do
       t <- newFromText "hello with spaces"
       unsafeRender t `shouldBe` "hello with spaces"
