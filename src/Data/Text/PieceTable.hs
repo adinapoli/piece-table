@@ -20,10 +20,16 @@ Not worrying about that now.
 
 module Data.Text.PieceTable (
     FileType(..)
+  , ViewPort
+  , newViewPort
+  , viewPortOffset
+  , viewPortSize
   , Piece
   , PieceTable
   , new
+  , new'
   , newFromText
+  , newFromText'
   -- * API as described in the paper
   , empty
   , insert
@@ -54,6 +60,7 @@ import           System.IO (openTempFile, hClose, hSetBuffering, BufferMode(..))
 import           Data.Monoid
 import           Foreign.Ptr
 import           Foreign.C.Types
+import           Data.Int
 
 --------------------------------------------------------------------------------
 data FileType = Original
@@ -93,7 +100,7 @@ unsafeRender PieceTable{..} = case table of
       let FileBuffer{..}  = fileBuffer
           startPtr = plusPtr fp_ptr (fp_offset + start)
       in case fileType of
-        Original -> acc <> unsafePerformIO (B.packCStringLen (fp_ptr, fp_size))
+        Original -> acc <> unsafePerformIO (B.packCStringLen (startPtr, fp_size))
         Buffer   -> acc <> B.take len (B.drop start addBuffer)
 
 {- | We want to support the API as described in the paper:
@@ -116,10 +123,34 @@ data FileBuffer a = FileBuffer {
   , fp_size    :: !Int
   }
 
+
+--------------------------------------------------------------------------------
+data ViewPort = ViewPort {
+    view_offset :: !Int64
+  , view_size   :: !Int
+  }
+
+--------------------------------------------------------------------------------
+newViewPort :: Int64 -> Int -> ViewPort
+newViewPort = ViewPort
+
+--------------------------------------------------------------------------------
+viewPortOffset :: ViewPort -> Int64
+viewPortOffset = view_offset
+
+--------------------------------------------------------------------------------
+viewPortSize :: ViewPort -> Int
+viewPortSize = view_size
+
 --------------------------------------------------------------------------------
 new :: FilePath -> IO PieceTable
-new fp = do
-  (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly Nothing
+new = new' Nothing
+
+--------------------------------------------------------------------------------
+new' :: Maybe ViewPort -> FilePath -> IO PieceTable
+new' mbViewPort fp = do
+  let range = (\ViewPort{..} -> (view_offset, view_size)) <$> mbViewPort
+  (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly range
   return $! PieceTable {
     table = [Piece Original 0 size]
     , fileBuffer = FileBuffer fp fbPtr rawSize offset size
@@ -127,20 +158,25 @@ new fp = do
     }
 
 --------------------------------------------------------------------------------
-newFromText :: T.Text -> IO PieceTable
-newFromText txt = do
+newFromText' :: Maybe ViewPort -> T.Text -> IO PieceTable
+newFromText' mbViewPort txt = do
+  let range = (\ViewPort{..} -> (view_offset, view_size)) <$> mbViewPort
   tmpDir    <- getTemporaryDirectory
   tid       <- show <$> myThreadId
   (fp, hdl) <- openTempFile tmpDir (tid <> ".bin")
   hSetBuffering hdl NoBuffering
   _ <- T.hPutStr hdl txt
   hClose hdl `seq` return ()
-  (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly Nothing
+  (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly range
   return $! PieceTable {
     table = [Piece Original 0 (T.length txt)]
     , fileBuffer = FileBuffer fp fbPtr rawSize offset size
     , addBuffer  = mempty
     }
+
+--------------------------------------------------------------------------------
+newFromText :: T.Text -> IO PieceTable
+newFromText = newFromText' Nothing
 
 --------------------------------------------------------------------------------
 empty :: PieceTable

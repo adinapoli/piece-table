@@ -18,6 +18,16 @@ spec = parallel $ do
       h <- getDataFileName "test-resources/hello.txt"
       t <- new h
       unsafeRender t `shouldBe` "hello with spaces\n"
+    it "new' (from disk) works" $ do
+      h <- getDataFileName "test-resources/hello.txt"
+      t <- new' (Just $ newViewPort 1 5) h
+      unsafeRender t `shouldBe` "ello "
+    it "newFromText works" $ do
+      t <- newFromText "άλφα"
+      unsafeRender t `shouldBe` "άλφα"
+    it "newFromText' works" $ do
+      t <- newFromText' (Just $ newViewPort 2 2) "hello"
+      unsafeRender t `shouldBe` "ll"
     it "unsafeRender of an unsplitted text works" $ do
       t <- newFromText "hello with spaces"
       unsafeRender t `shouldBe` "hello with spaces"
