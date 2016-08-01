@@ -34,6 +34,7 @@ library
                , mmap
                , directory
                , text
+               , vector
                , bytestring
   exposed-modules:
                   Data.Text.PieceTable

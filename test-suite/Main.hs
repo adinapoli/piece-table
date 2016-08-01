@@ -34,6 +34,9 @@ spec = parallel $ do
     it "Adding a single char works" $ do
       t <- newFromText "hello with spaces"
       unsafeRender (insert 'a' 0 t) `shouldBe` "ahello with spaces"
+    it "Adding a single char at the end works" $ do
+      t <- newFromText "hell"
+      unsafeRender (insert 'o' 4 t) `shouldBe` "hello"
     it "Deleting a single char works" $ do
       t <- newFromText "hello with spaces"
       unsafeRender (delete 0 t) `shouldBe` "ello with spaces"

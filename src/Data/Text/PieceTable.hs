@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE BangPatterns #-}
 
@@ -51,8 +52,14 @@ import qualified Data.Text as T
 import qualified Data.List as List
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as C8
 import qualified Data.Text.IO as T
 import qualified System.IO.MMap as MMap
+import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as VM
+import           Control.Monad.ST.Strict
+import           Debug.Trace
+import           Control.Monad
 import           System.IO.Unsafe
 import           Control.Concurrent (myThreadId)
 import           System.Directory
@@ -65,6 +72,7 @@ import           Data.Int
 --------------------------------------------------------------------------------
 data FileType = Original
               | Buffer
+              deriving Show
 
 --------------------------------------------------------------------------------
 -- | Each piece descriptor points to a span in the
@@ -77,13 +85,16 @@ data Piece = Piece {
     -- ^ On offset into that buffer.
   , len :: !Int
     -- ^ The length of the piece.
-  }
+  } deriving Show
+
 
 --------------------------------------------------------------------------------
 data PieceTable = PieceTable {
-    table :: [Piece]
-  , fileBuffer :: FileBuffer CChar
-  , addBuffer  :: B.ByteString
+    table       :: V.Vector Piece
+  , tableLength :: !Int
+  , tableSize   :: !Int
+  , fileBuffer  :: FileBuffer CChar
+  , addBuffer   :: B.ByteString
   }
 
 --------------------------------------------------------------------------------
@@ -91,7 +102,7 @@ data PieceTable = PieceTable {
 -- debugging and testing, but unsafe in the sense it will load the entire content
 -- into memory.
 unsafeRender :: PieceTable -> T.Text
-unsafeRender PieceTable{..} = case table of
+unsafeRender PieceTable{..} = let t = V.toList . V.take tableLength $ table in case (traceShowId t) of
   []  -> T.empty
   lst -> TE.decodeUtf8 $ List.foldl' mapPiece mempty lst
   where
@@ -116,8 +127,8 @@ type Item = Char
 
 --------------------------------------------------------------------------------
 data FileBuffer a = FileBuffer {
-    fb_path :: FilePath
-  , fp_ptr  :: Ptr a
+    fb_path    :: FilePath
+  , fp_ptr     :: Ptr a
   , fp_rawSize :: !Int
   , fp_offset  :: !Int
   , fp_size    :: !Int
@@ -151,10 +162,15 @@ new' :: Maybe ViewPort -> FilePath -> IO PieceTable
 new' mbViewPort fp = do
   let range = (\ViewPort{..} -> (view_offset, view_size)) <$> mbViewPort
   (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly range
+  vect <- VM.new 256
+  VM.write vect 0 (Piece Original 0 size)
+  t <- V.freeze vect
   return $! PieceTable {
-    table = [Piece Original 0 size]
-    , fileBuffer = FileBuffer fp fbPtr rawSize offset size
-    , addBuffer  = mempty
+      table       = t
+    , tableLength = 1
+    , tableSize   = 256
+    , fileBuffer  = FileBuffer fp fbPtr rawSize offset size
+    , addBuffer   = mempty
     }
 
 --------------------------------------------------------------------------------
@@ -168,10 +184,15 @@ newFromText' mbViewPort txt = do
   _ <- T.hPutStr hdl txt
   hClose hdl `seq` return ()
   (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly range
+  vect <- VM.new 256
+  VM.write vect 0 (Piece Original 0 (T.length txt))
+  t <- V.freeze vect
   return $! PieceTable {
-    table = [Piece Original 0 (T.length txt)]
-    , fileBuffer = FileBuffer fp fbPtr rawSize offset size
-    , addBuffer  = mempty
+      table       = t
+    , tableLength = 1
+    , tableSize   = 256
+    , fileBuffer  = FileBuffer fp fbPtr rawSize offset size
+    , addBuffer   = mempty
     }
 
 --------------------------------------------------------------------------------
@@ -181,7 +202,9 @@ newFromText = newFromText' Nothing
 --------------------------------------------------------------------------------
 empty :: PieceTable
 empty = PieceTable {
-    table = mempty
+      table = mempty
+    , tableSize = 0
+    , tableLength = 0
     , fileBuffer = FileBuffer mempty nullPtr 0 0 0
     , addBuffer  = mempty
     }
@@ -189,7 +212,25 @@ empty = PieceTable {
 --------------------------------------------------------------------------------
 -- | Inserts a single `Item` at `Position` in the given `PieceTable`.
 insert :: Item -> Position -> PieceTable -> PieceTable
-insert _ _ p = p
+insert i p t@PieceTable{..} = case findInsertionPoint of
+  Nothing -> let newL = tableLength + 1 in PieceTable {
+      table       = V.modify (newPieceAtEnd newL) table
+    , tableLength = newL
+    , tableSize   = if newL > tableSize then tableSize * 2 else tableSize
+    , fileBuffer  = fileBuffer
+    , addBuffer   = addBuffer <> C8.singleton i
+    }
+  Just x  -> let piece = table V.! x in case fileType piece of
+    Original -> t
+    Buffer   -> t
+  where
+    newPieceAtEnd :: forall s. Int -> VM.MVector s Piece -> ST s ()
+    newPieceAtEnd newL oldVect = do
+      targetVect <- if (newL > tableSize) then VM.grow oldVect (tableSize * 2) else return oldVect
+      VM.write targetVect (newL - 1) (Piece Buffer (B.length addBuffer) 1)
+
+    findInsertionPoint :: Maybe Int
+    findInsertionPoint = Nothing
 
 --------------------------------------------------------------------------------
 insertSequence :: T.Text -> Position -> PieceTable -> PieceTable
