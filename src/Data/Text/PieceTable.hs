@@ -58,6 +58,12 @@ import qualified Data.Text.IO as T
 import qualified System.IO.MMap as MMap
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as VM
+import qualified Data.Vector.Storable as VS
+import qualified Data.Vector.Storable.Mutable as VSM
+import           Foreign.ForeignPtr.Safe
+import           Foreign.Storable
+import           Data.UUID.V4 as UUID
+import           Data.UUID as UUID
 import           Data.Word
 import           Control.Monad.ST.Strict
 import           Debug.Trace
@@ -68,7 +74,6 @@ import           System.Directory
 import           System.IO (openTempFile, hClose, hSetBuffering, BufferMode(..))
 import           Data.Monoid
 import           Foreign.Ptr
-import           Foreign.C.Types
 import           Data.Int
 
 --------------------------------------------------------------------------------
@@ -91,13 +96,24 @@ data Piece = Piece {
 
 
 --------------------------------------------------------------------------------
+data AddBuffer a = AddBuffer {
+    addBufferVec :: VS.Vector a
+  , addBufferLength :: !Int
+  , addBufferSize :: !Int
+  }
+
+--------------------------------------------------------------------------------
 data PieceTable = PieceTable {
     table       :: V.Vector Piece
   , tableLength :: !Int
   , tableSize   :: !Int
   , fileBuffer  :: FileBuffer Word8
-  , addBuffer   :: B.ByteString
+  , addBuffer   :: AddBuffer  Word8
   }
+
+-- Idea: Try to use a Storable Vector and later on
+-- mapping only a piece of the string using:
+-- http://stackoverflow.com/questions/22508826/converting-vector-to-bytestring-in-haskell
 
 --------------------------------------------------------------------------------
 -- | Renders the **entire** `PieceTable` to a `Text`. Extremely useful for
@@ -111,10 +127,18 @@ unsafeRender PieceTable{..} = let t = V.toList . V.take tableLength $ table in c
     mapPiece :: B.ByteString -> Piece -> B.ByteString
     mapPiece !acc Piece{..} =
       let FileBuffer{..}  = fileBuffer
+          AddBuffer{..}   = addBuffer
           startPtr = plusPtr fp_ptr (fp_offset + start)
       in case fileType of
         Original -> acc <> unsafePerformIO (B.unsafePackCStringFinalizer startPtr fp_size (return ()))
-        Buffer   -> acc <> B.take len (B.drop start addBuffer)
+        Buffer   ->
+          let (fptr, rawLen) = VS.unsafeToForeignPtr0 (VS.slice start len addBufferVec)
+          in acc <> unsafePerformIO (withForeignPtr fptr $ \ptr ->
+                --B.unsafePackCStringFinalizer
+                B.packCStringLen (castPtr ptr, len * sizeOf (undefined :: Word8))
+                )
+                -- BS.packCStringLen (castPtr ptr, len * sizeOf (undefined :: Int))
+            --acc <> B.take len (B.drop start addBuffer)
 
 {- | We want to support the API as described in the paper:
 
@@ -167,12 +191,13 @@ new' mbViewPort fp = do
   vect <- VM.new 256
   VM.write vect 0 (Piece Original 0 size)
   t <- V.freeze vect
+
   return $! PieceTable {
       table       = t
     , tableLength = 1
     , tableSize   = 256
-    , fileBuffer  = FileBuffer fp fbPtr rawSize offset size
-    , addBuffer   = mempty
+    , fileBuffer  = FileBuffer fp  fbPtr rawSize offset size
+    , addBuffer   = AddBuffer (VS.replicate 256 (0 :: Word8)) 0 256
     }
 
 --------------------------------------------------------------------------------
@@ -180,8 +205,8 @@ newFromText' :: Maybe ViewPort -> T.Text -> IO PieceTable
 newFromText' mbViewPort txt = do
   let range = (\ViewPort{..} -> (view_offset, view_size)) <$> mbViewPort
   tmpDir    <- getTemporaryDirectory
-  tid       <- show <$> myThreadId
-  (fp, hdl) <- openTempFile tmpDir (tid <> ".bin")
+  uuid    <- UUID.toString <$> UUID.nextRandom
+  (fp, hdl) <- openTempFile tmpDir (uuid <> ".bin")
   hSetBuffering hdl NoBuffering
   _ <- T.hPutStr hdl txt
   hClose hdl `seq` return ()
@@ -194,7 +219,11 @@ newFromText' mbViewPort txt = do
     , tableLength = 1
     , tableSize   = 256
     , fileBuffer  = FileBuffer fp fbPtr rawSize offset size
-    , addBuffer   = mempty
+    , addBuffer   = AddBuffer {
+        addBufferVec = VS.replicate 256 (0 :: Word8)
+        , addBufferSize = 256
+        , addBufferLength = 0
+        }
     }
 
 --------------------------------------------------------------------------------
@@ -208,19 +237,29 @@ empty = PieceTable {
     , tableSize = 0
     , tableLength = 0
     , fileBuffer = FileBuffer mempty nullPtr 0 0 0
-    , addBuffer  = mempty
+    , addBuffer  = AddBuffer mempty 0 0
     }
 
 --------------------------------------------------------------------------------
 -- | Inserts a single `Item` at `Position` in the given `PieceTable`.
 insert :: Item -> Position -> PieceTable -> PieceTable
 insert i p t@PieceTable{..} = case findInsertionPoint of
-  Nothing -> let newL = tableLength + 1 in PieceTable {
+  Nothing ->
+    let newL = tableLength + 1
+        AddBuffer{..} = addBuffer
+    in PieceTable {
       table       = V.modify (newPieceAtEnd newL) table
     , tableLength = newL
     , tableSize   = if newL > tableSize then tableSize * 2 else tableSize
     , fileBuffer  = fileBuffer
-    , addBuffer   = addBuffer <> C8.singleton i
+    , addBuffer   =
+      let newABLen = addBufferLength + 1
+          newBSize = if newABLen > addBufferSize then addBufferSize * 2 else addBufferSize
+      in AddBuffer {
+          addBufferVec    = VS.modify (newCharAtEnd (fromIntegral . fromEnum $ i) newABLen addBufferSize) addBufferVec
+        , addBufferLength = newABLen
+        , addBufferSize   = newBSize
+        }
     }
   Just x  -> let piece = table V.! x in case fileType piece of
     Original -> t
@@ -229,7 +268,12 @@ insert i p t@PieceTable{..} = case findInsertionPoint of
     newPieceAtEnd :: forall s. Int -> VM.MVector s Piece -> ST s ()
     newPieceAtEnd newL oldVect = do
       targetVect <- if (newL > tableSize) then VM.grow oldVect (tableSize * 2) else return oldVect
-      VM.write targetVect (newL - 1) (Piece Buffer (B.length addBuffer) 1)
+      VM.write targetVect (newL - 1) (Piece Buffer (addBufferLength addBuffer) 1)
+
+    newCharAtEnd :: forall s. Word8 -> Int -> Int -> VSM.MVector s Word8 -> ST s ()
+    newCharAtEnd el newL currentSize oldVect = do
+      targetVect <- if (newL > currentSize) then VSM.grow oldVect (tableSize * 2) else return oldVect
+      VSM.write targetVect (newL - 1) el
 
     findInsertionPoint :: Maybe Int
     findInsertionPoint = Nothing
