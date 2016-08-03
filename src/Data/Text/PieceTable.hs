@@ -52,11 +52,13 @@ import qualified Data.Text as T
 import qualified Data.List as List
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Unsafe as B
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.Text.IO as T
 import qualified System.IO.MMap as MMap
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as VM
+import           Data.Word
 import           Control.Monad.ST.Strict
 import           Debug.Trace
 import           Control.Monad
@@ -93,7 +95,7 @@ data PieceTable = PieceTable {
     table       :: V.Vector Piece
   , tableLength :: !Int
   , tableSize   :: !Int
-  , fileBuffer  :: FileBuffer CChar
+  , fileBuffer  :: FileBuffer Word8
   , addBuffer   :: B.ByteString
   }
 
@@ -102,7 +104,7 @@ data PieceTable = PieceTable {
 -- debugging and testing, but unsafe in the sense it will load the entire content
 -- into memory.
 unsafeRender :: PieceTable -> T.Text
-unsafeRender PieceTable{..} = let t = V.toList . V.take tableLength $ table in case (traceShowId t) of
+unsafeRender PieceTable{..} = let t = V.toList . V.take tableLength $ table in case t of
   []  -> T.empty
   lst -> TE.decodeUtf8 $ List.foldl' mapPiece mempty lst
   where
@@ -111,7 +113,7 @@ unsafeRender PieceTable{..} = let t = V.toList . V.take tableLength $ table in c
       let FileBuffer{..}  = fileBuffer
           startPtr = plusPtr fp_ptr (fp_offset + start)
       in case fileType of
-        Original -> acc <> unsafePerformIO (B.packCStringLen (startPtr, fp_size))
+        Original -> acc <> unsafePerformIO (B.unsafePackCStringFinalizer startPtr fp_size (return ()))
         Buffer   -> acc <> B.take len (B.drop start addBuffer)
 
 {- | We want to support the API as described in the paper:
