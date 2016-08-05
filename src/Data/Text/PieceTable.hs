@@ -60,6 +60,9 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as VM
 import qualified Data.Vector.Storable as VS
 import qualified Data.Vector.Storable.Mutable as VSM
+import           Data.Foldable
+import qualified Data.Sequence as Seq
+import           Data.Sequence (Seq)
 import           Foreign.ForeignPtr.Safe
 import           Foreign.Storable
 import           Data.UUID.V4 as UUID
@@ -97,14 +100,14 @@ data Piece = Piece {
 
 --------------------------------------------------------------------------------
 data AddBuffer a = AddBuffer {
-    addBufferVec :: VS.Vector a
+    addBufferVec    :: VS.Vector a
   , addBufferLength :: !Int
-  , addBufferSize :: !Int
+  , addBufferSize   :: !Int
   }
 
 --------------------------------------------------------------------------------
 data PieceTable = PieceTable {
-    table       :: V.Vector Piece
+    table       :: Seq Piece
   , tableLength :: !Int
   , tableSize   :: !Int
   , fileBuffer  :: FileBuffer Word8
@@ -120,9 +123,7 @@ data PieceTable = PieceTable {
 -- debugging and testing, but unsafe in the sense it will load the entire content
 -- into memory.
 unsafeRender :: PieceTable -> T.Text
-unsafeRender PieceTable{..} = let t = V.toList . V.take tableLength $ table in case t of
-  []  -> T.empty
-  lst -> TE.decodeUtf8 $ List.foldl' mapPiece mempty lst
+unsafeRender PieceTable{..} = TE.decodeUtf8 $ foldl' mapPiece mempty table
   where
     mapPiece :: B.ByteString -> Piece -> B.ByteString
     mapPiece !acc Piece{..} =
@@ -188,12 +189,9 @@ new' :: Maybe ViewPort -> FilePath -> IO PieceTable
 new' mbViewPort fp = do
   let range = (\ViewPort{..} -> (view_offset, view_size)) <$> mbViewPort
   (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly range
-  vect <- VM.new 256
-  VM.write vect 0 (Piece Original 0 size)
-  t <- V.freeze vect
 
   return $! PieceTable {
-      table       = t
+      table       = Seq.singleton (Piece Original 0 size)
     , tableLength = 1
     , tableSize   = 256
     , fileBuffer  = FileBuffer fp  fbPtr rawSize offset size
@@ -211,11 +209,8 @@ newFromText' mbViewPort txt = do
   _ <- T.hPutStr hdl txt
   hClose hdl `seq` return ()
   (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly range
-  vect <- VM.new 256
-  VM.write vect 0 (Piece Original 0 (T.length txt))
-  t <- V.freeze vect
   return $! PieceTable {
-      table       = t
+      table       = Seq.singleton (Piece Original 0 (T.length txt))
     , tableLength = 1
     , tableSize   = 256
     , fileBuffer  = FileBuffer fp fbPtr rawSize offset size
@@ -248,7 +243,7 @@ insert i p t@PieceTable{..} = case findInsertionPoint of
     let newL = tableLength + 1
         AddBuffer{..} = addBuffer
     in PieceTable {
-      table       = V.modify (newPieceAtEnd newL) table
+      table       = table Seq.|> Piece Buffer addBufferLength 1
     , tableLength = newL
     , tableSize   = if newL > tableSize then tableSize * 2 else tableSize
     , fileBuffer  = fileBuffer
@@ -261,15 +256,8 @@ insert i p t@PieceTable{..} = case findInsertionPoint of
         , addBufferSize   = newBSize
         }
     }
-  Just x  -> let piece = table V.! x in case fileType piece of
-    Original -> t
-    Buffer   -> t
+  Just _  -> t
   where
-    newPieceAtEnd :: forall s. Int -> VM.MVector s Piece -> ST s ()
-    newPieceAtEnd newL oldVect = do
-      targetVect <- if (newL > tableSize) then VM.grow oldVect (tableSize * 2) else return oldVect
-      VM.write targetVect (newL - 1) (Piece Buffer (addBufferLength addBuffer) 1)
-
     newCharAtEnd :: forall s. Word8 -> Int -> Int -> VSM.MVector s Word8 -> ST s ()
     newCharAtEnd el newL currentSize oldVect = do
       targetVect <- if (newL > currentSize) then VSM.grow oldVect (tableSize * 2) else return oldVect
