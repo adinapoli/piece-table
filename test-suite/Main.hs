@@ -34,6 +34,17 @@ spec = parallel $ do
     it "Adding a single char at the beginning works" $ do
       t <- newFromText "hello with spaces"
       unsafeRender (insert 'a' 0 t) `shouldBe` "ahello with spaces"
+    it "Multiple atomic inserts" $ do
+      t <- newFromText ""
+      let t1 = insert 'a' 0 t
+      let t2 = insert 'b' 1 t1
+      let t3 = insert 'c' 2 t2
+      unsafeRender t1 `shouldBe` "a"
+      unsafeRender t2 `shouldBe` "ab"
+      unsafeRender t3 `shouldBe` "abc"
+    it "Adding a single char at the middle works" $ do
+      t <- newFromText "hello o you"
+      unsafeRender (insert 't' 6 t) `shouldBe` "hello to you"
     it "Adding a single char at the end works" $ do
       t <- newFromText "hell"
       unsafeRender (insert 'o' 4 t) `shouldBe` "hello"

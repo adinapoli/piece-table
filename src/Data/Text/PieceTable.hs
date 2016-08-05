@@ -232,51 +232,43 @@ empty = PieceTable {
 --------------------------------------------------------------------------------
 -- | Inserts a single `Item` at `Position` in the given `PieceTable`.
 insert :: Item -> Position -> PieceTable -> PieceTable
-insert i p t@PieceTable{..} = case findInsertionPoint table 0 of
-  Nothing ->
-    let newL = tableLength + 1
-        AddBuffer{..} = addBuffer
-    in PieceTable {
-      table       = table Seq.|> Piece Buffer addBufferLength 1
-    , tableLength = newL
-    , tableSize   = if newL > tableSize then tableSize * 2 else tableSize
-    , fileBuffer  = fileBuffer
-    , addBuffer   =
-      let newABLen = addBufferLength + 1
-          newBSize = if newABLen > addBufferSize then addBufferSize * 2 else addBufferSize
-      in AddBuffer {
-          addBufferVec    = VS.modify (newCharAtEnd (fromIntegral . fromEnum $ i) newABLen addBufferSize) addBufferVec
-        , addBufferLength = newABLen
-        , addBufferSize   = newBSize
-        }
-    }
-  Just (l,r) ->
-    let newL = tableLength + 1
-        AddBuffer{..} = addBuffer
-    in PieceTable {
-      table       = (l Seq.|> Piece Buffer addBufferLength 1) Seq.>< r
-    , tableLength = newL
-    , tableSize   = if newL > tableSize then tableSize * 2 else tableSize
-    , fileBuffer  = fileBuffer
-    , addBuffer   =
-      let newABLen = addBufferLength + 1
-          newBSize = if newABLen > addBufferSize then addBufferSize * 2 else addBufferSize
-      in AddBuffer {
-          addBufferVec    = VS.modify (newCharAtEnd (fromIntegral . fromEnum $ i) newABLen addBufferSize) addBufferVec
-        , addBufferLength = newABLen
-        , addBufferSize   = newBSize
-        }
-    }
+insert i p t@PieceTable{..} =
+  let (l, r) = findInsertionPoint p 0 (mempty, table)
+      newL = tableLength + 1
+      AddBuffer{..} = addBuffer
+ in PieceTable {
+   table       = (l Seq.|> Piece Buffer addBufferLength 1) Seq.>< r
+ , tableLength = newL
+ , tableSize   = if newL > tableSize then tableSize * 2 else tableSize
+ , fileBuffer  = fileBuffer
+ , addBuffer   =
+   let newABLen = addBufferLength + 1
+       newBSize = if newABLen > addBufferSize then addBufferSize * 2 else addBufferSize
+   in AddBuffer {
+       addBufferVec    = VS.modify (newCharAtEnd (fromIntegral . fromEnum $ i) newABLen addBufferSize) addBufferVec
+     , addBufferLength = newABLen
+     , addBufferSize   = newBSize
+     }
+ }
   where
+    ----------------------------------------------------------------------------
     newCharAtEnd :: forall s. Word8 -> Int -> Int -> VSM.MVector s Word8 -> ST s ()
     newCharAtEnd el newL currentSize oldVect = do
       targetVect <- if (newL > currentSize) then VSM.grow oldVect (tableSize * 2) else return oldVect
       VSM.write targetVect (newL - 1) el
 
-    findInsertionPoint :: Seq Piece -> Int -> Maybe (Seq Piece, Seq Piece)
-    findInsertionPoint x pos = case Seq.viewl x of
-      Seq.EmptyL  -> Nothing
-      e Seq.:< xs -> if len e > pos then Just (Seq.splitAt pos table) else findInsertionPoint xs (pos + (len e))
+    ----------------------------------------------------------------------------
+    findInsertionPoint :: Int -> Int -> (Seq Piece, Seq Piece) -> (Seq Piece, Seq Piece)
+    findInsertionPoint targetPos posCount (lq, rq) = case Seq.viewl rq of
+      Seq.EmptyL  -> (lq,rq)
+      e Seq.:< xs -> case targetPos of
+        0 -> (mempty, lq Seq.>< rq)
+        _ -> if (posCount + len e) > targetPos then
+          -- If we found an insertion point we need to split the piece in 2.
+          let p1 = Piece (fileType e) (start e)       (targetPos - posCount)
+              p2 = Piece (fileType e) (targetPos + 1) (len e - targetPos)
+          in (lq Seq.|> p1, p2 Seq.<| rq)
+          else findInsertionPoint targetPos (posCount + len e) (lq Seq.|> e, xs)
 
 --------------------------------------------------------------------------------
 insertSequence :: T.Text -> Position -> PieceTable -> PieceTable
