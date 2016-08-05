@@ -57,6 +57,7 @@ import qualified System.IO.MMap as MMap
 import qualified Data.Vector.Storable as VS
 import qualified Data.Vector.Storable.Mutable as VSM
 import           Data.Foldable
+import           Debug.Trace
 import qualified Data.Sequence as Seq
 import           Data.Sequence (Seq)
 import           Foreign.ForeignPtr
@@ -125,12 +126,12 @@ unsafeRender PieceTable{..} = TE.decodeUtf8 $ foldl' mapPiece mempty table
           AddBuffer{..}   = addBuffer
           startPtr = plusPtr fp_ptr (fp_offset + start)
       in case fileType of
-        Original -> acc <> unsafePerformIO (B.unsafePackCStringFinalizer startPtr fp_size (return ()))
+        Original -> acc <> unsafePerformIO (B.unsafePackCStringFinalizer startPtr len (return ()))
         Buffer   ->
           let (fptr, rawLen) = VS.unsafeToForeignPtr0 (VS.slice start len addBufferVec)
           in acc <> unsafePerformIO (withForeignPtr fptr $ \ptr ->
                 --B.unsafePackCStringFinalizer
-                B.packCStringLen (castPtr ptr, len * sizeOf (undefined :: Word8))
+                B.packCStringLen (castPtr ptr, rawLen)
                 )
                 -- BS.packCStringLen (castPtr ptr, len * sizeOf (undefined :: Int))
             --acc <> B.take len (B.drop start addBuffer)
@@ -143,7 +144,7 @@ typedef Item unsigned char;
 -}
 
 type Position = Int
-type Item = Char
+type Item = B.ByteString
 
 
 --------------------------------------------------------------------------------
@@ -232,7 +233,7 @@ empty = PieceTable {
 --------------------------------------------------------------------------------
 -- | Inserts a single `Item` at `Position` in the given `PieceTable`.
 insert :: Item -> Position -> PieceTable -> PieceTable
-insert i p t@PieceTable{..} =
+insert txt p t@PieceTable{..} =
   let (l, r) = findInsertionPoint p 0 (mempty, table)
       newL = tableLength + 1
       AddBuffer{..} = addBuffer
@@ -242,20 +243,21 @@ insert i p t@PieceTable{..} =
  , tableSize   = if newL > tableSize then tableSize * 2 else tableSize
  , fileBuffer  = fileBuffer
  , addBuffer   =
-   let newABLen = addBufferLength + 1
+   let newABLen = addBufferLength + B.length txt
        newBSize = if newABLen > addBufferSize then addBufferSize * 2 else addBufferSize
    in AddBuffer {
-       addBufferVec    = VS.modify (newCharAtEnd (fromIntegral . fromEnum $ i) newABLen addBufferSize) addBufferVec
+       addBufferVec    = VS.modify (newAtEnd txt newABLen addBufferSize) addBufferVec
      , addBufferLength = newABLen
      , addBufferSize   = newBSize
      }
  }
   where
     ----------------------------------------------------------------------------
-    newCharAtEnd :: forall s. Word8 -> Int -> Int -> VSM.MVector s Word8 -> ST s ()
-    newCharAtEnd el newL currentSize oldVect = do
+    newAtEnd :: forall s. B.ByteString -> Int -> Int -> VSM.MVector s Word8 -> ST s ()
+    newAtEnd el newL currentSize oldVect = do
       targetVect <- if (newL > currentSize) then VSM.grow oldVect (tableSize * 2) else return oldVect
-      VSM.write targetVect (newL - 1) el
+      -- TODO: Slow!
+      forM_ (B.unpack el) (VSM.write targetVect (newL - 1))
 
     ----------------------------------------------------------------------------
     findInsertionPoint :: Int -> Int -> (Seq Piece, Seq Piece) -> (Seq Piece, Seq Piece)
@@ -266,8 +268,8 @@ insert i p t@PieceTable{..} =
         _ -> if (posCount + len e) > targetPos then
           -- If we found an insertion point we need to split the piece in 2.
           let p1 = Piece (fileType e) (start e)       (targetPos - posCount)
-              p2 = Piece (fileType e) (targetPos + 1) (len e - targetPos)
-          in (lq Seq.|> p1, p2 Seq.<| rq)
+              p2 = Piece (fileType e) targetPos (len e - targetPos)
+          in (lq Seq.|> p1, p2 Seq.<| xs)
           else findInsertionPoint targetPos (posCount + len e) (lq Seq.|> e, xs)
 
 --------------------------------------------------------------------------------
