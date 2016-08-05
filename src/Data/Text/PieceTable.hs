@@ -49,30 +49,24 @@ module Data.Text.PieceTable (
 
 --------------------------------------------------------------------------------
 import qualified Data.Text as T
-import qualified Data.List as List
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Unsafe as B
-import qualified Data.ByteString.Char8 as C8
 import qualified Data.Text.IO as T
 import qualified System.IO.MMap as MMap
-import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as VM
 import qualified Data.Vector.Storable as VS
 import qualified Data.Vector.Storable.Mutable as VSM
 import           Data.Foldable
 import qualified Data.Sequence as Seq
 import           Data.Sequence (Seq)
-import           Foreign.ForeignPtr.Safe
+import           Foreign.ForeignPtr
 import           Foreign.Storable
 import           Data.UUID.V4 as UUID
 import           Data.UUID as UUID
 import           Data.Word
+import           Control.Exception (bracket)
 import           Control.Monad.ST.Strict
-import           Debug.Trace
-import           Control.Monad
 import           System.IO.Unsafe
-import           Control.Concurrent (myThreadId)
 import           System.Directory
 import           System.IO (openTempFile, hClose, hSetBuffering, BufferMode(..))
 import           Data.Monoid
@@ -189,7 +183,6 @@ new' :: Maybe ViewPort -> FilePath -> IO PieceTable
 new' mbViewPort fp = do
   let range = (\ViewPort{..} -> (view_offset, view_size)) <$> mbViewPort
   (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly range
-
   return $! PieceTable {
       table       = Seq.singleton (Piece Original 0 size)
     , tableLength = 1
@@ -203,23 +196,24 @@ newFromText' :: Maybe ViewPort -> T.Text -> IO PieceTable
 newFromText' mbViewPort txt = do
   let range = (\ViewPort{..} -> (view_offset, view_size)) <$> mbViewPort
   tmpDir    <- getTemporaryDirectory
-  uuid    <- UUID.toString <$> UUID.nextRandom
-  (fp, hdl) <- openTempFile tmpDir (uuid <> ".bin")
-  hSetBuffering hdl NoBuffering
-  _ <- T.hPutStr hdl txt
-  hClose hdl `seq` return ()
-  (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly range
-  return $! PieceTable {
-      table       = Seq.singleton (Piece Original 0 (T.length txt))
-    , tableLength = 1
-    , tableSize   = 256
-    , fileBuffer  = FileBuffer fp fbPtr rawSize offset size
-    , addBuffer   = AddBuffer {
-        addBufferVec = VS.replicate 256 (0 :: Word8)
-        , addBufferSize = 256
-        , addBufferLength = 0
-        }
-    }
+  uuid      <- UUID.toString <$> UUID.nextRandom
+  bracket (openTempFile tmpDir (uuid <> ".bin")) (hClose . snd) $ \(fp, hdl) -> do
+    hSetBuffering hdl NoBuffering
+    _ <- T.hPutStr hdl txt
+    hClose hdl `seq` return ()
+
+    (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly range
+    return $! PieceTable {
+        table       = Seq.singleton (Piece Original 0 (T.length txt))
+      , tableLength = 1
+      , tableSize   = 256
+      , fileBuffer  = FileBuffer fp fbPtr rawSize offset size
+      , addBuffer   = AddBuffer {
+          addBufferVec = VS.replicate 256 (0 :: Word8)
+          , addBufferSize = 256
+          , addBufferLength = 0
+          }
+      }
 
 --------------------------------------------------------------------------------
 newFromText :: T.Text -> IO PieceTable
@@ -238,7 +232,7 @@ empty = PieceTable {
 --------------------------------------------------------------------------------
 -- | Inserts a single `Item` at `Position` in the given `PieceTable`.
 insert :: Item -> Position -> PieceTable -> PieceTable
-insert i p t@PieceTable{..} = case findInsertionPoint of
+insert i p t@PieceTable{..} = case findInsertionPoint table 0 of
   Nothing ->
     let newL = tableLength + 1
         AddBuffer{..} = addBuffer
@@ -256,15 +250,33 @@ insert i p t@PieceTable{..} = case findInsertionPoint of
         , addBufferSize   = newBSize
         }
     }
-  Just _  -> t
+  Just (l,r) ->
+    let newL = tableLength + 1
+        AddBuffer{..} = addBuffer
+    in PieceTable {
+      table       = (l Seq.|> Piece Buffer addBufferLength 1) Seq.>< r
+    , tableLength = newL
+    , tableSize   = if newL > tableSize then tableSize * 2 else tableSize
+    , fileBuffer  = fileBuffer
+    , addBuffer   =
+      let newABLen = addBufferLength + 1
+          newBSize = if newABLen > addBufferSize then addBufferSize * 2 else addBufferSize
+      in AddBuffer {
+          addBufferVec    = VS.modify (newCharAtEnd (fromIntegral . fromEnum $ i) newABLen addBufferSize) addBufferVec
+        , addBufferLength = newABLen
+        , addBufferSize   = newBSize
+        }
+    }
   where
     newCharAtEnd :: forall s. Word8 -> Int -> Int -> VSM.MVector s Word8 -> ST s ()
     newCharAtEnd el newL currentSize oldVect = do
       targetVect <- if (newL > currentSize) then VSM.grow oldVect (tableSize * 2) else return oldVect
       VSM.write targetVect (newL - 1) el
 
-    findInsertionPoint :: Maybe Int
-    findInsertionPoint = Nothing
+    findInsertionPoint :: Seq Piece -> Int -> Maybe (Seq Piece, Seq Piece)
+    findInsertionPoint x pos = case Seq.viewl x of
+      Seq.EmptyL  -> Nothing
+      e Seq.:< xs -> if len e > pos then Just (Seq.splitAt pos table) else findInsertionPoint xs (pos + (len e))
 
 --------------------------------------------------------------------------------
 insertSequence :: T.Text -> Position -> PieceTable -> PieceTable

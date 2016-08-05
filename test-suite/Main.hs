@@ -31,7 +31,7 @@ spec = parallel $ do
     it "unsafeRender of an unsplitted text works" $ do
       t <- newFromText "hello with spaces"
       unsafeRender t `shouldBe` "hello with spaces"
-    it "Adding a single char works" $ do
+    it "Adding a single char at the beginning works" $ do
       t <- newFromText "hello with spaces"
       unsafeRender (insert 'a' 0 t) `shouldBe` "ahello with spaces"
     it "Adding a single char at the end works" $ do
