@@ -53,7 +53,7 @@ spec = do
     it "Adding multiple words works" $ do
       h <- getDataFileName "test-resources/hello.txt"
       t <- new h
-      unsafeRender (insert (C8.pack "this is a nice") 6 t) `shouldBe` "hello this is a nice world with spaces/n"
+      unsafeRender (insert (C8.pack "this is a nice world ") 6 t) `shouldBe` "hello this is a nice world with spaces\n"
     it "Deleting a single char works" $ do
       t <- newFromText "hello with spaces"
       unsafeRender (delete 0 t) `shouldBe` "ello with spaces"

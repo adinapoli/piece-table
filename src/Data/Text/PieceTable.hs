@@ -131,7 +131,7 @@ unsafeRender PieceTable{..} = TE.decodeUtf8 $ foldl' mapPiece mempty table
           let (fptr, rawLen) = VS.unsafeToForeignPtr0 (VS.slice start len addBufferVec)
           in acc <> unsafePerformIO (withForeignPtr fptr $ \ptr ->
                 --B.unsafePackCStringFinalizer
-                B.packCStringLen (castPtr ptr, rawLen)
+                B.unsafePackCStringFinalizer (castPtr ptr) rawLen (return ())
                 )
                 -- BS.packCStringLen (castPtr ptr, len * sizeOf (undefined :: Int))
             --acc <> B.take len (B.drop start addBuffer)
@@ -238,7 +238,7 @@ insert txt p t@PieceTable{..} =
       newL = tableLength + 1
       AddBuffer{..} = addBuffer
  in PieceTable {
-   table       = (l Seq.|> Piece Buffer addBufferLength 1) Seq.>< r
+   table       = (l Seq.|> Piece Buffer addBufferLength (B.length txt)) Seq.>< r
  , tableLength = newL
  , tableSize   = if newL > tableSize then tableSize * 2 else tableSize
  , fileBuffer  = fileBuffer
@@ -246,18 +246,18 @@ insert txt p t@PieceTable{..} =
    let newABLen = addBufferLength + B.length txt
        newBSize = if newABLen > addBufferSize then addBufferSize * 2 else addBufferSize
    in AddBuffer {
-       addBufferVec    = VS.modify (newAtEnd txt newABLen addBufferSize) addBufferVec
+       addBufferVec    = VS.modify (newAtEnd txt addBufferLength newABLen addBufferSize) addBufferVec
      , addBufferLength = newABLen
      , addBufferSize   = newBSize
      }
  }
   where
     ----------------------------------------------------------------------------
-    newAtEnd :: forall s. B.ByteString -> Int -> Int -> VSM.MVector s Word8 -> ST s ()
-    newAtEnd el newL currentSize oldVect = do
+    newAtEnd :: forall s. B.ByteString -> Int -> Int -> Int -> VSM.MVector s Word8 -> ST s ()
+    newAtEnd el oldL newL currentSize oldVect = do
       targetVect <- if (newL > currentSize) then VSM.grow oldVect (tableSize * 2) else return oldVect
-      -- TODO: Slow!
-      forM_ (B.unpack el) (VSM.write targetVect (newL - 1))
+      -- TODO: Slow and ugly!
+      forM_ (zip [0 ..] (B.unpack el)) (\(idx, e) -> VSM.write targetVect (oldL + idx) e)
 
     ----------------------------------------------------------------------------
     findInsertionPoint :: Int -> Int -> (Seq Piece, Seq Piece) -> (Seq Piece, Seq Piece)
