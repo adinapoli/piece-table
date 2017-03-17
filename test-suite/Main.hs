@@ -27,7 +27,16 @@ spec = do
     it "newFromText works" $ do
       t <- newFromText "test test"
       unsafeRender t `shouldBe` "test test"
-    it "newFromText' works" $ do
+    it "Chinese ideograms" $ do
+      t <- newFromText "基地系列"
+      unsafeRender t `shouldBe` "基地系列"
+    it "newFromText' (no viewport) works" $ do
+      t <- newFromText' Nothing "hello"
+      unsafeRender t `shouldBe` "hello"
+    it "newFromText' (basic viewport) works" $ do
+      t <- newFromText' (Just $ newViewPort 1 3) "foobarbazquux1234567890"
+      unsafeRender t `shouldBe` "oob"
+    it "newFromText' (with viewport) works" $ do
       t <- newFromText' (Just $ newViewPort 2 2) "hello"
       unsafeRender t `shouldBe` "ll"
     it "unsafeRender of an unsplitted text works" $ do

@@ -14,7 +14,8 @@ data structures as described:
 http://e98cuenc.free.fr/wordprocessor/piecetable.html
 
 
-NOTE: At this point, I'm perfectly aware performance is gonna be awful.
+NOTE0: Currently, only UTF-8 is supported.
+NOTE1: At this point, I'm perfectly aware performance is gonna be awful.
 Not worrying about that now.
 
 -}
@@ -61,7 +62,6 @@ import           Debug.Trace
 import qualified Data.Sequence as Seq
 import           Data.Sequence (Seq)
 import           Foreign.ForeignPtr
-import           Foreign.Storable
 import           Data.UUID.V4 as UUID
 import           Data.UUID as UUID
 import           Data.Word
@@ -124,7 +124,7 @@ unsafeRender PieceTable{..} = TE.decodeUtf8 $ foldl' mapPiece mempty table
     mapPiece !acc Piece{..} =
       let FileBuffer{..}  = fileBuffer
           AddBuffer{..}   = addBuffer
-          startPtr = plusPtr fp_ptr (fp_offset + start)
+          startPtr = plusPtr fp_ptr start
       in case fileType of
         Original -> acc <> unsafePerformIO (B.unsafePackCStringFinalizer startPtr len (return ()))
         Buffer   ->
@@ -185,10 +185,10 @@ new' mbViewPort fp = do
   let range = (\ViewPort{..} -> (view_offset, view_size)) <$> mbViewPort
   (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly range
   return $! PieceTable {
-      table       = Seq.singleton (Piece Original 0 size)
+      table       = Seq.singleton (Piece Original offset size)
     , tableLength = 1
     , tableSize   = 256
-    , fileBuffer  = FileBuffer fp  fbPtr rawSize offset size
+    , fileBuffer  = FileBuffer fp fbPtr rawSize offset size
     , addBuffer   = AddBuffer (VS.replicate 256 (0 :: Word8)) 0 256
     }
 
@@ -200,19 +200,21 @@ newFromText' mbViewPort txt = do
   uuid      <- UUID.toString <$> UUID.nextRandom
   bracket (openTempFile tmpDir (uuid <> ".bin")) (hClose . snd) $ \(fp, hdl) -> do
     hSetBuffering hdl NoBuffering
-    _ <- T.hPutStr hdl txt
+    let txtBytes = TE.encodeUtf8 txt
+    let txtBytesLen = B.length txtBytes
+    _ <- B.hPutStr hdl txtBytes
     hClose hdl `seq` return ()
 
     (fbPtr, rawSize, offset, size) <- MMap.mmapFilePtr fp MMap.ReadOnly range
     return $! PieceTable {
-        table       = Seq.singleton (Piece Original 0 (T.length txt))
+        table       = Seq.singleton (Piece Original offset size)
       , tableLength = 1
       , tableSize   = 256
       , fileBuffer  = FileBuffer fp fbPtr rawSize offset size
       , addBuffer   = AddBuffer {
-          addBufferVec = VS.replicate 256 (0 :: Word8)
-          , addBufferSize = 256
+            addBufferVec = VS.replicate 256 (0 :: Word8)
           , addBufferLength = 0
+          , addBufferSize = 256
           }
       }
 
